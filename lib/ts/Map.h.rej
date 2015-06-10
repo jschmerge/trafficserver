@@ -1,0 +1,17 @@
+--- lib/ts/Map.h
++++ lib/ts/Map.h
+@@ -1178,9 +1178,12 @@
+   size_t m_count; ///< # of elements stored in the table.
+   bool m_auto_expand_p; ///< Automatically resize for long chains.
+   Array m_array; ///< Bucket storage.
+-//  DLL<Bucket, typename Bucket::Link_link> m_bucket_chain;
+   /// Make available to nested classes statically.
+-  typedef DList(Bucket, m_link) BucketChain;
++  // We must reach inside the link hackery because we're in a template and
++  // must use typename. Older compilers don't handle typename outside of
++  // template context so if we put typename in the base definition it won't
++  // work in non-template classes.
++  typedef DLL<Bucket, typename Bucket::Link_m_link> BucketChain;
+   /// List of non-empty buckets.
+   BucketChain m_bucket_chain;
+ 

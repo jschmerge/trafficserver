@@ -1,0 +1,13 @@
+--- lib/ts/List.h
++++ lib/ts/List.h
+@@ -162,8 +162,8 @@
+ 
+   DLL() : head(NULL) {}
+ };
+-#define DList(_c, _f)  DLL<_c, typename _c::Link##_##_f>
+-#define DListM(_c, _m, _ml, _l) DLL<_c, typename _c::Link##_##_ml##_##_l>
++#define DList(_c, _f)  DLL<_c, _c::Link##_##_f>
++#define DListM(_c, _m, _ml, _l) DLL<_c, _c::Link##_##_ml##_##_l>
+ 
+ template <class C, class L> inline void
+ DLL<C,L>::push(C *e) {
