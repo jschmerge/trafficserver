@@ -28,35 +28,13 @@
 // Global
 Store theStore;
 
-#define VOL_STR "volume="
-int getVolume(char* line) {
-  int v = 0;
-  if(!line) return 0;
-  char* str = strstr(line, VOL_STR);
-  char* vol_start = str;
-  if(!str) return 0;
-  while (*str && !ParseRules::is_digit(*str))
-    str++;
-  v = ink_atoi(str);
-
-  while (*str && ParseRules::is_digit(*str))
-    str++;
-  while(*str) {
-    *vol_start = *str;
-    vol_start++;
-    str++;
-  }
-  *vol_start = 0;
-  Debug("cache_init", "returning %d and '%s'", v, line);
-
-  if(v < 0) return 0;
-  return v;
-}
-
-
 //
 // Store
 //
+
+char const Store::VOLUME_KEY[] = "volume";
+char const Store::HASH_SEED_KEY[] = "seed";
+
 Ptr<ProxyMutex> tmp_p;
 Store::Store():n_disks(0), disk(NULL)
 {
@@ -206,6 +184,19 @@ Span::path(char *filename, int64_t * aoffset, char *buf, int buflen)
 }
 
 void
+Span::hash_seed_string_set(char const* s)
+{
+  if (hash_seed_string) ats_free(hash_seed_string);
+  hash_seed_string = s ? ats_strdup(s) : NULL;
+}
+
+void
+Span::volume_number_set(int n)
+{
+  forced_volume_num = n;
+}
+
+void
 Store::delete_all()
 {
   for (int i = 0; i < n_disks; i++)
@@ -226,6 +217,8 @@ Span::~Span()
   ats_free(pathname);
   if (link.next)
     delete link.next;
+  if (hash_seed_string)
+    ats_free(hash_seed_string);
 }
 
 inline int
@@ -298,46 +291,57 @@ Store::read_config(int fd)
   }
   // For each line
 
-  char line[256];
-  while (ink_file_fd_readline(fd, sizeof(line) - 1, line) > 0) {
+  char line[1024];
+  int len;
+  while ((len = ink_file_fd_readline(fd, sizeof(line), line)) > 0) {
+    char const* path;
+    char const* seed = 0;
     // update lines
 
-    line[sizeof(line) - 1] = 0;
-    ln++;
+    ++ln;
+
+    // Because the SimpleTokenizer is a bit too simple, we have to normalize whitespace.
+    for ( char *spot = line, *limit = line+len ; spot < limit ; ++spot )
+      if (ParseRules::is_space(*spot)) *spot = ' '; // force whitespace to literal space.
+
+    SimpleTokenizer tokens(line, ' ', SimpleTokenizer::OVERWRITE_INPUT_STRING);
 
     // skip comments and blank lines
-
-    if (*line == '#')
+    path = tokens.getNext();
+    if (0 == path || '#' == path[0])
       continue;
-    char *n = line;
-    n += strspn(n, " \t\n");
-    if (!*n)
-      continue;
-
-   int volume_id = getVolume(n);
 
     // parse
-    Debug("cache_init", "Store::read_config: \"%s\"", n);
+    Debug("cache_init", "Store::read_config: \"%s\"", path);
 
-    char *e = strpbrk(n, " \t\n");
-    int len = e ? e - n : strlen(n);
-    (void) len;
     int64_t size = -1;
-    while (e && *e && !ParseRules::is_digit(*e))
-      e++;
-    if (e && *e) {
-      if ((size = ink_atoi64(e)) <= 0) {
-        err = "error parsing size";
-        goto Lfail;
+    int volume_num = -1;
+    char const* e;
+    while (0 != (e = tokens.getNext())) {
+      if (ParseRules::is_digit(*e)) {
+        if ((size = ink_atoi64(e)) <= 0) {
+          err = "error parsing size";
+          goto Lfail;
+        }
+      } else if (0 == strncasecmp(HASH_SEED_KEY, e, sizeof(HASH_SEED_KEY)-1)) {
+        e += sizeof(HASH_SEED_KEY) - 1;
+        if ('=' == *e) ++e;
+        if (*e && !ParseRules::is_space(*e))
+          seed = e;
+      } else if (0 == strncasecmp(VOLUME_KEY, e, sizeof(VOLUME_KEY)-1)) {
+        e += sizeof(VOLUME_KEY) - 1;
+        if ('=' == *e) ++e;
+        if (!*e || !ParseRules::is_digit(*e) || 0 >= (volume_num = ink_atoi(e))) {
+          err = "error parsing volume number";
+          goto Lfail;
+        }
       }
     }
 
-    n[len] = 0;
-    char *pp = Layout::get()->relative(n);
+    char *pp = Layout::get()->relative(path);
     ns = NEW(new Span);
-    ns->vol_num = volume_id;
-    Debug("cache_init", "Store::read_config - ns = NEW (new Span); ns->init(\"%s\",%" PRId64 "), ns->vol_num=%d",
-      pp, size, ns->vol_num);
+    Debug("cache_init", "Store::read_config - ns = NEW (new Span); ns->init(\"%s\",%" PRId64 "), forced volume=%d%s%s",
+          pp, size, volume_num, seed ? " seed=" : "", seed ? seed : "");
     if ((err = ns->init(pp, size))) {
       char buf[4096];
       snprintf(buf, sizeof(buf), "could not initialize storage \"%s\" [%s]", pp, err);
@@ -349,6 +353,10 @@ Store::read_config(int fd)
     }
     ats_free(pp);
     n_dsstore++;
+
+    // Set side values if present.
+    if (seed) ns->hash_seed_string_set(seed);
+    if (volume_num > 0) ns->volume_number_set(volume_num);
 
     // new Span
     {
@@ -1161,6 +1169,8 @@ Span::dup()
   ds->pathname = ats_strdup(pathname);
   if (ds->link.next)
     ds->link.next = ds->link.next->dup();
+  if (hash_seed_string) ds->hash_seed_string = ats_strdup(hash_seed_string);
+  ds->forced_volume_num = forced_volume_num;
   return ds;
 }
 

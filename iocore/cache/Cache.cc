@@ -559,10 +559,14 @@ CacheProcessor::start_internal(int flags)
         }
       }
       if (diskok) {
-        gdisks[gndisks] = NEW(new CacheDisk());
-        gdisks[gndisks]->forced_volume_num = sd->vol_num;
-        Debug("cache_hosting", "Disk: %d, blocks: %d", gndisks, blocks);
         int sector_size = sd->hw_sector_size;
+
+        gdisks[gndisks] = NEW(new CacheDisk());
+        gdisks[gndisks]->forced_volume_num = sd->forced_volume_num;
+        if (sd->hash_seed_string)
+          gdisks[gndisks]->hash_seed_string = ats_strdup(sd->hash_seed_string);
+
+        Debug("cache_hosting", "Disk: %d, blocks: %d", gndisks, blocks);
 
         if (sector_size < cache_config_force_sector_size)
           sector_size = cache_config_force_sector_size;
@@ -1025,19 +1029,23 @@ Vol::clear_dir()
 int
 Vol::init(char *s, off_t blocks, off_t dir_skip, bool clear)
 {
-  dir_skip = ROUND_TO_STORE_BLOCK((dir_skip < START_POS ? START_POS : dir_skip));
-  path = ats_strdup(s);
-  const size_t hash_id_size = strlen(s) + 32;
+  int i;
+
+  char* seed_str = disk->hash_seed_string ? disk->hash_seed_string : s;
+  const size_t hss_size = strlen(seed_str);
+  const size_t hash_id_size = hss_size + 32;
+
   hash_id = (char *)ats_malloc(hash_id_size);
-  ink_strlcpy(hash_id, s, hash_id_size);
-  const size_t s_size = strlen(s);
-  snprintf(hash_id + s_size, (hash_id_size - s_size), " %" PRIu64 ":%" PRIu64 "",
+  ink_strlcpy(hash_id, seed_str, hash_id_size);
+  snprintf(hash_id + hss_size, hash_id_size - hss_size, " %" PRIu64 ":%" PRIu64 "",
            (uint64_t)dir_skip, (uint64_t)blocks);
   hash_id_md5.encodeBuffer(hash_id, strlen(hash_id));
+
+  dir_skip = ROUND_TO_STORE_BLOCK((dir_skip < START_POS ? START_POS : dir_skip));
+  path = ats_strdup(s);
   len = blocks * STORE_BLOCK_SIZE;
   ink_assert(len <= MAX_VOL_SIZE);
   skip = dir_skip;
-  int i;
   prev_recover_pos = 0;
 
   // successive approximation, directory/meta data eats up some storage

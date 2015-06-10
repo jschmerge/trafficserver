@@ -51,7 +51,8 @@ struct Span
   int64_t offset;                 // used only if (file == true)
   int alignment;
   int disk_id;
-  int vol_num;
+  int forced_volume_num;  ///< Force span in to specific volume.
+  char *hash_seed_string; ///< Used to seed the stripe assignment hash.
   LINK(Span, link);
 
 private:
@@ -94,9 +95,16 @@ public:
            int64_t * offset,      // for file, start offset (unsupported)
            char *buf, int buflen);      // where to store the path
 
+  /// Set the hash seed string.
+  void hash_seed_string_set(char const* s);
+  /// Set the volume number.
+  void volume_number_set(int n);
+
   Span()
     : pathname(NULL), blocks(0), hw_sector_size(DEFAULT_HW_SECTOR_SIZE), file_pathname(false),
-      isRaw(true), offset(0), alignment(0), disk_id(0), is_mmapable_internal(false)
+      isRaw(true), offset(0), alignment(0), disk_id(0),
+      forced_volume_num(-1), hash_seed_string(NULL),
+      is_mmapable_internal(false)
   { }
   ~Span();
 };
@@ -173,6 +181,10 @@ struct Store
   //
   const char *read_config(int fd = -1);
   int write_config_data(int fd);
+
+  /// Additional configuration key values.
+  static char const VOLUME_KEY[];
+  static char const HASH_SEED_KEY[];
 };
 
 extern Store theStore;
