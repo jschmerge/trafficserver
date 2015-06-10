@@ -292,6 +292,19 @@ Bounce(bool cluster)
   return TS_ERR_OKAY;
 }
 
+/*-------------------------------------------------------------------------
+ * Storage operation
+ *-------------------------------------------------------------------------
+ * Requests an operation on a storage device.
+ */
+TSError
+StorageDeviceCmdOffline(char const* dev)
+{
+  Debug("amc", "[CoreAPI.cc:StorageDeviceCmd] '%s'", dev);
+  lmgmt->signalEvent(MGMT_EVENT_STORAGE_DEVICE_CMD_OFFLINE, dev);
+  return TS_ERR_OKAY;
+}
+
 /**************************************************************************
  * RECORD OPERATIONS
  *************************************************************************/

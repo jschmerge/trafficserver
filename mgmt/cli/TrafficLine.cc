@@ -44,6 +44,7 @@ static int ShutdownMgmtCluster;
 static int ShutdownMgmtLocal;
 static int ClearCluster;
 static int ClearNode;
+static char StorageCmdOffline[1024];
 static int VersionFlag;
 
 static TSError
@@ -71,6 +72,8 @@ handleArgInvocation()
     fprintf(stderr, "Query Deadhosts is not implemented, it requires support for congestion control.\n");
     fprintf(stderr, "For more details, examine the old code in cli/CLI.cc: QueryDeadhosts()\n");
     return TS_ERR_FAIL;
+  } else if (*StorageCmdOffline) {
+    return TSStorageDeviceCmdOffline(StorageCmdOffline);
   } else if (*ReadVar != '\0') {        // Handle a value read
     if (*SetVar != '\0' || *VarValue != '\0') {
       fprintf(stderr, "%s: Invalid Argument Combination: Can not read and set values at the same time\n", programName);
@@ -148,6 +151,7 @@ main(int argc, char **argv)
   ClearCluster = 0;
   ClearNode = 0;
   VersionFlag = 0;
+  *StorageCmdOffline = 0;
 
   // build the application information structure
   appVersionInfo.setup(PACKAGE_NAME,"traffic_line", PACKAGE_VERSION, __DATE__, __TIME__, BUILD_MACHINE, BUILD_PERSON, "");
@@ -169,6 +173,7 @@ main(int argc, char **argv)
     {"bounce_local", 'b', "Bounce local traffic_server", "F", &BounceLocal, NULL, NULL},
     {"clear_cluster", 'C', "Clear Statistics (cluster wide)", "F", &ClearCluster, NULL, NULL},
     {"clear_node", 'c', "Clear Statistics (local node)", "F", &ClearNode, NULL, NULL},
+    {"offline", '\0', "Mark cache storage offline", "S1024", &StorageCmdOffline, NULL, NULL},
     {"version", 'V', "Print Version Id", "T", &VersionFlag, NULL, NULL},
   };
 

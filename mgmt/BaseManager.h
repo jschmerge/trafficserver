@@ -64,9 +64,15 @@
 #define MGMT_EVENT_ROLL_LOG_FILES        10008
 #define MGMT_EVENT_LIBRECORDS            10009
 
+// cache storage operations - each is a distinct event.
+// this is done because the code paths share nothing but boilerplate logic
+// so it's easier to do this than to try to encode an opcode and yet another
+// case statement.
+#define MGMT_EVENT_STORAGE_DEVICE_CMD_OFFLINE     10011
+
 /***********************************************************************
  *
- * MODULAIZATTION: if you are adding new signals, please ensure to add
+ * MODULARIZATION: if you are adding new signals, please ensure to add
  *                 the corresponding signals in librecords/I_RecSignals.h
  *
  *

@@ -661,7 +661,7 @@ LogAccess::marshal_record(char *record, char *buf)
   typedef RecInt LogInt;
   typedef RecCounter LogCounter;
   typedef RecFloat LogFloat;
-  typedef RecString LogString;
+//  typedef RecString LogString;
 
   RecDataT stype = RECD_NULL;
   bool found = false;

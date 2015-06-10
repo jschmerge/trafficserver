@@ -3457,7 +3457,7 @@ CompWithHeader<T>::checkHeader(MsgBuffer const& buffer, CompType ect) {
 inline AssignInfoComp::Bucket& AssignInfoComp::bucket(int idx) { return m_buckets[idx]; }
 inline AssignInfoComp::Bucket const& AssignInfoComp::bucket(int idx) const{ return m_buckets[idx]; }
 inline bool AssignInfoComp::compare(Bucket const buckets[N_BUCKETS]) const {
-  return 0 == memcmp(buckets, m_buckets, sizeof(buckets));
+  return 0 == memcmp(buckets, m_buckets, N_BUCKETS * sizeof(Bucket));
 }
 
 inline RouterViewComp::RouterViewComp()

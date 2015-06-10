@@ -93,6 +93,8 @@ extern "C" int plock(int);
 #include <google/profiler.h>
 #endif
 
+static void*  mgmt_storage_device_cmd_callback(void* x, char* data, int len);
+
 //
 // Global Data
 //
@@ -1803,6 +1805,11 @@ main(int argc, char **argv)
     pmgmt->registerMgmtCallback(MGMT_EVENT_SHUTDOWN, mgmt_restart_shutdown_callback, NULL);
     pmgmt->registerMgmtCallback(MGMT_EVENT_RESTART, mgmt_restart_shutdown_callback, NULL);
 
+    // Callback for various storage commands. These all go to the same function so we
+    // pass the event code along so it can do the right thing. We cast that to <int> first
+    // just to be safe because the value is a #define, not a typed value.
+    pmgmt->registerMgmtCallback(MGMT_EVENT_STORAGE_DEVICE_CMD_OFFLINE, mgmt_storage_device_cmd_callback, reinterpret_cast<void*>(static_cast<int>(MGMT_EVENT_STORAGE_DEVICE_CMD_OFFLINE)));
+
     // The main thread also becomes a net thread.
     ink_set_thread_name("[ET_NET 0]");
 
@@ -1924,5 +1931,28 @@ mgmt_restart_shutdown_callback(void *, char *, int data_len)
 {
   NOWARN_UNUSED(data_len);
   sync_cache_dir_on_shutdown();
+  return NULL;
+}
+
+static void*
+mgmt_storage_device_cmd_callback(void* data, char* arg, int len)
+{
+  // data is the device name to control
+  CacheDisk* d = 0;
+
+  Debug("amc", "storage device op - '%.*s'", len, arg);
+
+  d = cacheProcessor.find_by_path(arg, len);
+  if (d) {
+    intptr_t cmd = reinterpret_cast<intptr_t>(data);
+    Debug("amc", "Found storage for '%.*s'", len, arg);
+
+    switch (cmd) {
+    case MGMT_EVENT_STORAGE_DEVICE_CMD_OFFLINE:
+      Debug("amc", "Marking %.*s offline", len, arg);
+      cacheProcessor.mark_storage_offline(d);
+      break;
+    }
+  }
   return NULL;
 }

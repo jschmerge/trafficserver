@@ -79,6 +79,7 @@ typedef enum
   DIAGS,
   STATS_RESET,
   ENCRYPT_TO_FILE,
+  STORAGE_DEVICE_CMD_OFFLINE,
   UNDEFINED_OP /* This must be last */
 } OpType;
 

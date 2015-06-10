@@ -452,6 +452,18 @@ Bounce(bool cluster)
 }
 
 
+/*-------------------------------------------------------------------------
+ * StorageDeviceOp
+ *-------------------------------------------------------------------------
+ * Request storage device option.
+ */
+TSError
+StorageDeviceCmdOffline(char const* dev)
+{
+  TSError ret;
+  ret = send_request_name(main_socket_fd, STORAGE_DEVICE_CMD_OFFLINE, const_cast<char*>(dev));
+  return TS_ERR_OKAY != ret ? ret : parse_reply(main_socket_fd);
+}
 /***************************************************************************
  * Record Operations
  ***************************************************************************/
