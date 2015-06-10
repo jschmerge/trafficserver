@@ -7202,6 +7202,8 @@ HttpSM::redirect_request(const char *redirect_url, const int redirect_len)
   t_state.parent_result.r = PARENT_UNDEFINED;
   t_state.request_sent_time = 0;
   t_state.response_received_time = 0;
+  // Comcast patch for redirect not going to the redirected origin server
+  t_state.dns_info.lookup_success = false;
   t_state.cache_info.write_lock_state = HttpTransact::CACHE_WL_INIT;
   t_state.next_action = HttpTransact::REDIRECT_READ;
 
@@ -7218,7 +7220,7 @@ HttpSM::redirect_request(const char *redirect_url, const int redirect_len)
 #else
       char *buf = (char *)ats_malloc(host_len + 7);
 #endif
-      ink_strlcpy(buf, host, host_len);
+      ink_strlcpy(buf, host, host_len+1);
       host_len += snprintf(buf + host_len, sizeof(buf) - host_len, ":%d", port);
       t_state.hdr_info.client_request.value_set(MIME_FIELD_HOST, MIME_LEN_HOST, buf, host_len);
 #if !defined(__GNUC__)
