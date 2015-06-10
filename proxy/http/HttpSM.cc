@@ -4376,7 +4376,7 @@ HttpSM::do_http_server_open(bool raw)
       (t_state.txn_conf->keep_alive_post_out == 1 || t_state.hdr_info.request_content_length == 0) &&
       ua_session != NULL) {
     shared_result = httpSessionManager.acquire_session(this,    // state machine
-                                                       &t_state.current.server->addr.sa,    // ip + port
+                                                       &t_state.current.server->addr,    // ip + port
                                                        t_state.current.server->name,    // hostname
                                                        ua_session,      // has ptr to bound ua sessions
                                                        this     // sm

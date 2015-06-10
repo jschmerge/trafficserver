@@ -211,7 +211,7 @@ _acquire_session(SessionBucket *bucket, sockaddr const* ip, INK_MD5 &hostname_ha
 }
 
 HSMresult_t
-HttpSessionManager::acquire_session(Continuation *cont, sockaddr const* ip,
+HttpSessionManager::acquire_session(Continuation *cont, IpEndpoint* ip,
                                     const char *hostname, HttpClientSession *ua_session, HttpSM *sm)
 {
   NOWARN_UNUSED(cont);
@@ -228,7 +228,8 @@ HttpSessionManager::acquire_session(Continuation *cont, sockaddr const* ip,
   //  to server affinity so that we don't break certain types
   //  of authentication.
   INK_MD5 hostname_hash;
-  bool hash_computed = false;
+
+  ink_code_MMH((unsigned char *) hostname, strlen(hostname), (unsigned char *) &hostname_hash);
 
   // First check to see if there is a server session bound
   //   to the user agent session
@@ -236,15 +237,24 @@ HttpSessionManager::acquire_session(Continuation *cont, sockaddr const* ip,
   if (to_return != NULL) {
     ua_session->attach_server_session(NULL);
 
-    if (ats_ip_addr_eq(&to_return->server_ip.sa, ip) &&
-      ats_ip_port_cast(&to_return->server_ip) == ats_ip_port_cast(ip)
-    ) {
-      if (!hash_computed) {
-        ink_code_MMH((unsigned char *) hostname, strlen(hostname), (unsigned char *) &hostname_hash);
-        hash_computed = true;
-      }
-
+    if (ats_ip_port_cast(&to_return->server_ip) == ats_ip_port_cast(ip)) {
+      // Must have the same port to reuse
       if (hostname_hash == to_return->hostname_hash) {
+        if (!ats_ip_addr_eq(&to_return->server_ip, ip)) {
+          // Note changed behavior for debugging purposes.
+          // Also, if we make this configurable, that check would go in this condition
+          // [amc] - Need to investigate how this interacts with use_client_target_addr - don't want to override that.
+          //       - that may not be able to happen, though (since we don't do FQDN resolution in that case)
+          ip_port_text_buffer ipb1, ipb2;
+          Debug("teak", "Retaining server session to '%s' [%s] instead of current target [%s]"
+                , hostname
+                , ats_ip_nptop(&to_return->server_ip, ipb1, sizeof(ipb1))
+                , ats_ip_nptop(ip, ipb2, sizeof(ipb2))
+            );
+          // Note - the caller's server IP address must be updated because we have effectively changed it.
+          // [amc] - need to investigate if this is stored elsewhere so that can be updated as well.
+          ats_ip_copy(ip, &to_return->server_ip);
+        }
         Debug("http_ss", "[%" PRId64 "] [acquire session] returning attached session ", to_return->con_id);
         to_return->state = HSS_ACTIVE;
         sm->attach_server_session(to_return);
@@ -253,31 +263,34 @@ HttpSessionManager::acquire_session(Continuation *cont, sockaddr const* ip,
     }
     // Release this session back to the main session pool and
     //   then continue looking for one from the shared pool
-    Debug("http_ss", "[%" PRId64 "] [acquire session] " "session not a match, returning to shared pool", to_return->con_id);
+    if (is_debug_tag_set("http_ss")) {
+      ip_port_text_buffer ippb;
+      Debug("http_ss", "[%" PRId64 "] [acquire session] " "session '%s' [%s] not a match, returning to shared pool"
+            , to_return->con_id
+            , hostname
+            , ats_ip_nptop(&to_return->server_ip, ippb, sizeof(ippb))
+        );
+    }
     to_return->release();
     to_return = NULL;
   }
 
   // Now check to see if we have a connection is our
   //  shared connection pool
-  int l1_index = FIRST_LEVEL_HASH(ip);
+  int l1_index = FIRST_LEVEL_HASH(&ip->sa);
   EThread *ethread = this_ethread();
 
   ink_assert(l1_index < HSM_LEVEL1_BUCKETS);
 
-  // Will need the hash for this lookup for sure.
-  if (!hash_computed)
-    ink_code_MMH((unsigned char *) hostname, strlen(hostname), (unsigned char *) &hostname_hash);
-
   if (2 == sm->t_state.txn_conf->share_server_sessions) {
     ink_assert(ethread->l1_hash);
-    return _acquire_session(ethread->l1_hash + l1_index, ip, hostname_hash, sm);
+    return _acquire_session(ethread->l1_hash + l1_index, &ip->sa, hostname_hash, sm);
   } else {
     SessionBucket *bucket = g_l1_hash + l1_index;
 
     MUTEX_TRY_LOCK(lock, bucket->mutex, ethread);
     if (lock) {
-      return _acquire_session(bucket, ip, hostname_hash, sm);
+      return _acquire_session(bucket, &ip->sa, hostname_hash, sm);
     } else {
       Debug("http_ss", "[acquire session] could not acquire session due to lock contention");
     }
