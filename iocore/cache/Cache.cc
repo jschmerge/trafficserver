@@ -167,22 +167,13 @@ int64_t
 cache_bytes_used(int volume)
 {
   uint64_t used = 0;
-  int start = 0; // These defaults are for volume 0, or volume 1 with volume.config
-  int end = 1;
 
-  if (-1 == volume) {
-    end = gnvol;
-  } else if (volume > 1) { // Special case when volume.config is used
-    start = volume - 1;
-    end = volume;
-  }
-  
-  for (int i = start; i < end; i++) {
-    if (!DISK_BAD(gvol[i]->disk)) {
+  for (int i = 0; i < gnvol; i++) {
+    if (!DISK_BAD(gvol[i]->disk) && (volume == -1 || gvol[i]->cache_vol->vol_number == volume)) {
       if (!gvol[i]->header->cycle)
-          used += gvol[i]->header->write_pos - gvol[i]->start;
+        used += gvol[i]->header->write_pos - gvol[i]->start;
       else
-          used += gvol[i]->len - vol_dirlen(gvol[i]) - EVACUATION_SIZE;
+        used += gvol[i]->len - vol_dirlen(gvol[i]) - EVACUATION_SIZE;
     }
   }
   return used;
@@ -192,18 +183,29 @@ int
 cache_stats_bytes_used_cb(const char *name, RecDataT data_type, RecData *data, RecRawStatBlock *rsb, int id)
 {
   int volume = -1;
+  char *p;
 
   NOWARN_UNUSED(data_type);
   NOWARN_UNUSED(data);
 
   // Well, there's no way to pass along the volume ID, so extracting it from the stat name.
-  if (0 == strncmp(name+20, "volume_", 10))
-    volume = strtol(name+30, NULL, 10);
+  p = strstr((char *) name, "volume_");
+  if (p != NULL) {
+    // I'm counting on the compiler to optimize out strlen("volume_").
+    volume = strtol(p + strlen("volume_"), NULL, 10);
+  }
 
-  if (cacheProcessor.initialized == CACHE_INITIALIZED)
-    RecSetGlobalRawStatSum(rsb, id, cache_bytes_used(volume));
-
-  RecRawStatSyncSum(name, data_type, data, rsb, id);
+  if (cacheProcessor.initialized == CACHE_INITIALIZED) {
+    int64_t used, total =0;
+    float percent_full;
+    used =  cache_bytes_used(volume);
+    RecSetGlobalRawStatSum(rsb, id, used);
+    RecRawStatSyncSum(name, data_type, data, rsb, id);
+    RecGetGlobalRawStatSum(rsb, (int) cache_bytes_total_stat, &total);
+    percent_full = (float)used / (float)total * 100;
+    // The perent_full float below gets rounded down
+    RecSetGlobalRawStatSum(rsb, (int) cache_percent_full_stat, percent_full);
+  }
 
   return 1;
 }
@@ -558,6 +560,7 @@ CacheProcessor::start_internal(int flags)
       }
       if (diskok) {
         gdisks[gndisks] = NEW(new CacheDisk());
+        gdisks[gndisks]->forced_volume_num = sd->vol_num;
         Debug("cache_hosting", "Disk: %d, blocks: %d", gndisks, blocks);
         int sector_size = sd->hw_sector_size;
 
@@ -2233,17 +2236,25 @@ cplist_update()
     ConfigVol *config_vol = config_volumes.cp_queue.head;
     for (; config_vol; config_vol = config_vol->link.next) {
       if (config_vol->number == cp->vol_number) {
-        int size_in_blocks = config_vol->size << (20 - STORE_BLOCK_SHIFT);
+        off_t size_in_blocks = config_vol->size << (20 - STORE_BLOCK_SHIFT);
         if ((cp->size <= size_in_blocks) && (cp->scheme == config_vol->scheme)) {
           config_vol->cachep = cp;
         } else {
           /* delete this volume from all the disks */
           int d_no;
+          int clearCV = 1;
           for (d_no = 0; d_no < gndisks; d_no++) {
-            if (cp->disk_vols[d_no])
-              cp->disk_vols[d_no]->disk->delete_volume(cp->vol_number);
+              if (cp->disk_vols[d_no]) {
+                 if(cp->disk_vols[d_no]->disk->forced_volume_num == cp->vol_number) {
+                    clearCV = 0;
+                    config_vol->cachep = cp;
+                 } else {
+                    cp->disk_vols[d_no]->disk->delete_volume(cp->vol_number);
+                 }
+             }
           }
-          config_vol = NULL;
+          if (clearCV)
+              config_vol = NULL;
         }
         break;
       }
@@ -2267,6 +2278,46 @@ cplist_update()
       cp = cp->link.next;
   }
 }
+
+int fillExclusiveDisks(CacheVol *cp) {
+  int diskCount = 0;
+  int volume_number = cp->vol_number;
+  Debug("cache_init", "volume %d", volume_number);
+
+   for (int i = 0; i < gndisks; i++) {
+     if(gdisks[i]->forced_volume_num != volume_number)
+       continue;
+     /* The user had created several volumes before - clear the disk
+        and create one volume for http */
+     for(int j = 0; j < (int)gdisks[i]->header->num_volumes; j++) {
+       if (volume_number != gdisks[i]->disk_vols[j]->vol_number) {
+         Note("Clearing Disk: %s", gdisks[i]->path);
+         gdisks[i]->delete_all_volumes();
+         break;
+       }
+     }
+
+     diskCount++;
+     int64_t size_diff = gdisks[i]->num_usable_blocks;
+     DiskVolBlock *dpb;
+     do {
+       dpb = gdisks[i]->create_volume(volume_number, size_diff, cp->scheme);
+       if (dpb) {
+         if (!cp->disk_vols[i]) {
+           cp->disk_vols[i] = gdisks[i]->get_diskvol(volume_number);
+         }
+         size_diff -= dpb->len;
+         cp->size += dpb->len;
+         cp->num_vols++;
+       } else {
+         Debug("cache_init", "create_volume failed");
+         break;
+       }
+     } while ((size_diff > 0));
+   }
+   return diskCount;
+}
+
 
 int
 cplist_reconfigure()
@@ -2349,17 +2400,26 @@ cplist_reconfigure()
         percent_remaining -= (config_vol->size < 128) ? 0 : config_vol->percent;
       }
       if (config_vol->size < 128) {
-        Warning("the size of volume %d (%d) is less than the minimum required volume size %d",
-                config_vol->number, config_vol->size, 128);
+        Warning("the size of volume %d (%"PRId64") is less than the minimum required volume size %d",
+                config_vol->number, (long)config_vol->size, 128);
         Warning("volume %d is not created", config_vol->number);
       }
-      Debug("cache_hosting", "Volume: %d Size: %d", config_vol->number, config_vol->size);
+      Debug("cache_hosting", "Volume: %d Size: %"PRId64, config_vol->number, (long)config_vol->size);
     }
     cplist_update();
     /* go through volume config and grow and create volumes */
 
     config_vol = config_volumes.cp_queue.head;
+    for (; config_vol; config_vol = config_vol->link.next) {
+      // if volume is given exclusive disks, fill here and continue
+      volume_number = config_vol->number;
+      if (!config_vol->cachep) {
+        continue;
+      }
+      fillExclusiveDisks(config_vol->cachep);
+    }
 
+    config_vol = config_volumes.cp_queue.head;
     for (; config_vol; config_vol = config_vol->link.next) {
 
       size = config_vol->size;
@@ -2369,6 +2429,11 @@ cplist_reconfigure()
       volume_number = config_vol->number;
 
       size_in_blocks = ((off_t) size * 1024 * 1024) / STORE_BLOCK_SIZE;
+
+      if(config_vol->cachep && config_vol->cachep->num_vols > 0) {
+        gnvol += config_vol->cachep->num_vols;
+        continue;
+      }
 
       if (!config_vol->cachep) {
         // we did not find a corresponding entry in cache vol...creat one
@@ -2480,6 +2545,13 @@ create_volume(int volume_number, off_t size_in_blocks, int scheme, CacheVol *cp)
   off_t to_create = size_in_blocks;
   off_t blocks_per_vol = VOL_BLOCK_SIZE >> STORE_BLOCK_SHIFT;
   int full_disks = 0;
+
+  cp->vol_number = volume_number;
+  cp->scheme = scheme;
+  if(fillExclusiveDisks(cp)) {
+    Debug("cache_init", "volume successfully filled from forced disks: volume_number=%d", volume_number);
+    return 0;
+  }
 
   int *sp = new int[gndisks];
   memset(sp, 0, gndisks * sizeof(int));

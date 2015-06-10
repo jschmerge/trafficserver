@@ -33,6 +33,7 @@
 #include "ProxyConfig.h"
 #include "HTTP.h"
 #include "HttpTransact.h"
+#include <zlib.h>
 
 #define PARENT_RegisterConfigUpdateFunc REC_RegisterConfigUpdateFunc
 #define PARENT_ReadConfigInteger REC_ReadConfigInteger
@@ -487,6 +488,8 @@ ParentRecord::FindParent(bool first_call, ParentResult * result, RD * rdata, Par
   bool parentUp = false;
   bool parentRetry = false;
   bool bypass_ok = (go_direct == true && config->DNS_ParentOnly == 0);
+  char *uri;
+  uLong crc;
 
   HttpRequestData *request_info = (HttpRequestData *) rdata;
 
@@ -518,6 +521,12 @@ ParentRecord::FindParent(bool first_call, ParentResult * result, RD * rdata, Par
         } else {
             cur_index = 0;
         }
+        break;
+      case P_HASH_URI:
+        uri = strstr(rdata->get_string() + 7, "/");
+        crc = crc32(0, Z_NULL, 0);
+        crc = crc32(crc, (unsigned char *)uri, strlen(uri));
+        cur_index = crc % num_parents;
         break;
       case P_NO_ROUND_ROBIN:
         cur_index = result->start_parent = 0;
@@ -759,7 +768,9 @@ ParentRecord::Init(matcher_line * line_info)
         round_robin = P_STRICT_ROUND_ROBIN;
       } else if (strcasecmp(val, "false") == 0) {
         round_robin = P_NO_ROUND_ROBIN;
-      } else {
+      } else if(strcasecmp(val, "urihash")) {
+        round_robin = P_HASH_URI;
+       }else {
         round_robin = P_NO_ROUND_ROBIN;
         errPtr = "invalid argument to round_robin directive";
       }
